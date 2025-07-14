@@ -8,8 +8,12 @@ This is an AWS Advanced Networking training repository containing educational ma
 
 ## Repository Structure
 
-- `010-docs/` - Contains training documentation
+- `010-docs/` - Contains training documentation organized by topic modules
   - `010-syllabus.md` - Comprehensive 220-topic syllabus covering AWS networking from foundations to advanced topics
+  - `020-foundations/` - Topics 1-10: VPC basics, subnets, gateways
+  - `030-hybrid-networking/` - Topics 11-25: Direct Connect, VPN, Transit Gateway
+  - `040-advanced-vpc/` - Topics 26-40: Endpoints, PrivateLink, DNS
+  - Additional numbered directories for remaining modules (050-security/, 060-global-networking/, etc.)
 - `README.md` - Basic repository description
 
 ## Content Architecture
@@ -32,8 +36,18 @@ The training content is organized into major learning modules:
 
 This repository currently contains only documentation and training materials. There are no build systems, package managers, or code execution requirements. All content is in Markdown format for educational purposes.
 
+## File Naming and Organization
+
+Content files follow a structured naming convention:
+- Module directories: `XXX-module-name/` (e.g., `020-foundations/`)
+- Topic files: `NNN-topic-name.md` where NNN matches the topic number in the syllabus
+- Support files: `000-training-structure.md`, `001-lab-template.md`
+
+## Working with This Repository
+
 When working with this repository:
 - Focus on documentation organization and clarity
 - Maintain the structured learning progression in the syllabus
 - Preserve the topic numbering system for reference consistency
-- Do not use Claude signature in commit messages
+- Follow the existing file naming conventions for new content
+- All content should be educational and focused on AWS networking concepts
