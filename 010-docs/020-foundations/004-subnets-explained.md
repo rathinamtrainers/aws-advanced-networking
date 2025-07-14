@@ -1,12 +1,15 @@
 # Topic 4: Subnets Explained - Public, Private, and Isolated
 
 ## Prerequisites
+
 - Completed Topics 1-3 (AWS Networking, Infrastructure, VPC Basics)
 - Understanding of IP addressing and routing concepts
 - Familiarity with AWS VPC components
 
 ## Learning Objectives
+
 By the end of this topic, you will be able to:
+
 - Differentiate between public, private, and isolated subnets
 - Design subnet architectures for different application tiers
 - Implement proper subnet routing configurations
@@ -15,20 +18,24 @@ By the end of this topic, you will be able to:
 ## Theory
 
 ### Subnet Overview
+
 Subnets are subdivisions of your VPC that allow you to group resources based on security and operational requirements. Each subnet resides in a single Availability Zone.
 
 ### Types of Subnets
 
 #### 1. Public Subnets
+
 **Definition**: Subnets with route to Internet Gateway, allowing direct internet connectivity
 
 **Characteristics**:
+
 - Route table contains route to Internet Gateway (0.0.0.0/0 → IGW)
 - Resources can have public IP addresses
 - Directly accessible from internet (with proper security groups)
 - Used for: Load balancers, bastion hosts, NAT instances, web servers
 
 **Use Cases**:
+
 - Application Load Balancers (ALB)
 - Network Load Balancers (NLB) for internet-facing services
 - Bastion hosts for administrative access
@@ -36,9 +43,11 @@ Subnets are subdivisions of your VPC that allow you to group resources based on 
 - Web servers requiring direct internet access
 
 #### 2. Private Subnets
+
 **Definition**: Subnets without direct route to Internet Gateway but with outbound internet access via NAT
 
 **Characteristics**:
+
 - No route to Internet Gateway in route table
 - Route to NAT Gateway/Instance for outbound internet (0.0.0.0/0 → NAT)
 - Resources cannot be directly accessed from internet
@@ -46,6 +55,7 @@ Subnets are subdivisions of your VPC that allow you to group resources based on 
 - Used for: Application servers, internal load balancers, microservices
 
 **Use Cases**:
+
 - Application tier servers
 - Internal Application Load Balancers
 - Microservices and APIs
@@ -53,15 +63,18 @@ Subnets are subdivisions of your VPC that allow you to group resources based on 
 - Container orchestration nodes
 
 #### 3. Isolated Subnets (Private without NAT)
+
 **Definition**: Subnets with no internet connectivity in either direction
 
 **Characteristics**:
+
 - No route to Internet Gateway or NAT Gateway
 - Completely isolated from internet
 - Can only communicate within VPC or through VPC endpoints
 - Used for: Databases, highly sensitive workloads, compliance requirements
 
 **Use Cases**:
+
 - Database servers (RDS, ElastiCache)
 - Data warehouses (Redshift)
 - Internal-only services
@@ -71,6 +84,7 @@ Subnets are subdivisions of your VPC that allow you to group resources based on 
 ### Subnet Design Patterns
 
 #### 1. Three-Tier Architecture
+
 ```
 Internet → Public Subnet (Web Tier)
            ↓
@@ -80,6 +94,7 @@ Internet → Public Subnet (Web Tier)
 ```
 
 #### 2. Microservices Architecture
+
 ```
 Internet → Public Subnet (Load Balancers)
            ↓
@@ -89,6 +104,7 @@ Internet → Public Subnet (Load Balancers)
 ```
 
 #### 3. Multi-AZ Pattern
+
 ```
 AZ-1a: Public + Private + Isolated
 AZ-1b: Public + Private + Isolated
@@ -98,12 +114,14 @@ AZ-1c: Public + Private + Isolated
 ### Subnet Routing Details
 
 #### Auto-Assign Public IP
+
 - **Public subnets**: Usually enabled
 - **Private subnets**: Usually disabled
 - **Isolated subnets**: Always disabled
 - Can be overridden per instance at launch
 
 #### Route Table Associations
+
 - Each subnet must be associated with a route table
 - Subnets without explicit association use main route table
 - Multiple subnets can share same route table
@@ -114,9 +132,11 @@ AZ-1c: Public + Private + Isolated
 ### Lab Duration: 120 minutes
 
 ### Step 1: Design Advanced Subnet Architecture
+
 **Objective**: Plan comprehensive subnet design with multiple tiers
 
 **Architecture Planning**:
+
 ```
 VPC: 10.0.0.0/16
 
@@ -137,19 +157,24 @@ Management:
 **Design Verification**: Document IP allocation and routing requirements
 
 ### Step 2: Create Extended VPC Infrastructure
+
 **Objective**: Build comprehensive subnet infrastructure
 
 **AWS Console Steps**:
+
 1. Create VPC (if not exists from previous lab):
+   
    - **Name**: `Multi-Tier-VPC`
    - **CIDR**: `10.0.0.0/16`
 
 2. Create all subnets:
+   
    - Navigate to **VPC Console** → **Subnets**
    - Click **"Create subnet"**
    - Create each subnet with specifications above
 
 **CLI Commands**:
+
 ```bash
 # Create VPC
 aws ec2 create-vpc --cidr-block 10.0.0.0/16 \
@@ -183,14 +208,18 @@ aws ec2 create-subnet --vpc-id $VPC_ID --cidr-block 10.0.100.0/24 --availability
 ```
 
 ### Step 3: Configure Internet Gateway and NAT Gateways
+
 **Objective**: Set up internet connectivity infrastructure
 
 **AWS Console Steps**:
+
 1. Create and attach Internet Gateway:
+   
    - **Name**: `Multi-Tier-IGW`
    - Attach to Multi-Tier-VPC
 
 2. Create NAT Gateways for high availability:
+   
    - Navigate to **VPC Console** → **NAT Gateways**
    - Click **"Create NAT Gateway"**
    - **Name**: `NAT-Gateway-1a`
@@ -202,6 +231,7 @@ aws ec2 create-subnet --vpc-id $VPC_ID --cidr-block 10.0.100.0/24 --availability
      - **Subnet**: Public-1b
 
 **CLI Commands**:
+
 ```bash
 # Create Internet Gateway
 aws ec2 create-internet-gateway \
@@ -222,36 +252,45 @@ EIP_1B=$(aws ec2 allocate-address --domain vpc --tag-specifications 'ResourceTyp
 
 # Create NAT Gateways
 NAT_1A=$(aws ec2 create-nat-gateway --subnet-id $PUBLIC_1A --allocation-id $EIP_1A \
-    --tag-specifications 'ResourceType=nat-gateway,Tags=[{Key=Name,Value=NAT-Gateway-1a}]' --query 'NatGateway.NatGatewayId' --output text)
+    --tag-specifications 'ResourceType=natgateway,Tags=[{Key=Name,Value=NAT-Gateway-1a}]' --query 'NatGateway.NatGatewayId' --output text)
 
 NAT_1B=$(aws ec2 create-nat-gateway --subnet-id $PUBLIC_1B --allocation-id $EIP_1B \
-    --tag-specifications 'ResourceType=nat-gateway,Tags=[{Key=Name,Value=NAT-Gateway-1b}]' --query 'NatGateway.NatGatewayId' --output text)
+    --tag-specifications 'ResourceType=natgateway,Tags=[{Key=Name,Value=NAT-Gateway-1b}]' --query 'NatGateway.NatGatewayId' --output text)
 
 # Wait for NAT Gateways to be available
 aws ec2 wait nat-gateway-available --nat-gateway-ids $NAT_1A $NAT_1B
 ```
 
 ### Step 4: Create Route Tables for Each Subnet Type
+
 **Objective**: Configure proper routing for different subnet types
 
 **AWS Console Steps**:
+
 1. Create Public Route Table:
+   
    - **Name**: `Public-Route-Table`
    - Add route: `0.0.0.0/0` → Internet Gateway
    - Associate: Public-1a, Public-1b, Management subnets
 
 2. Create Private Route Tables (one per AZ for HA):
+   
    - **Name**: `Private-Route-Table-1a`
+   
    - Add route: `0.0.0.0/0` → NAT-Gateway-1a
+   
    - Associate: Private-1a subnet
    
    - **Name**: `Private-Route-Table-1b`
+   
    - Add route: `0.0.0.0/0` → NAT-Gateway-1b
+   
    - Associate: Private-1b subnet
 
 3. Isolated subnets use main route table (no internet routes)
 
 **CLI Commands**:
+
 ```bash
 # Create Public Route Table
 PUBLIC_RT=$(aws ec2 create-route-table --vpc-id $VPC_ID \
@@ -290,15 +329,19 @@ aws ec2 associate-route-table --route-table-id $PRIVATE_RT_1B --subnet-id $PRIVA
 ```
 
 ### Step 5: Test Subnet Connectivity
+
 **Objective**: Verify each subnet type behaves correctly
 
 **Testing Steps**:
+
 1. Launch instances in each subnet type:
+   
    - **Bastion Host**: Management subnet (public IP)
    - **App Server**: Private subnet (no public IP)
    - **Database**: Isolated subnet (no public IP)
 
 2. Test connectivity patterns:
+   
    - SSH to bastion host from internet
    - SSH from bastion to app server (private IP)
    - SSH from bastion to database (private IP)
@@ -306,6 +349,7 @@ aws ec2 associate-route-table --route-table-id $PRIVATE_RT_1B --subnet-id $PRIVA
    - Verify database has no internet access
 
 **Security Groups Setup**:
+
 ```bash
 # Create security groups
 BASTION_SG=$(aws ec2 create-security-group --group-name Bastion-SG --description "Bastion Host Security Group" --vpc-id $VPC_ID --query 'GroupId' --output text)
@@ -329,6 +373,7 @@ aws ec2 authorize-security-group-ingress --group-id $DB_SG --protocol tcp --port
 ```
 
 ## Architecture Diagram
+
 ```
 Internet
     |
@@ -355,16 +400,18 @@ Internet
 ```
 
 ## Troubleshooting
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| Private instance no internet | Missing NAT Gateway route | Add 0.0.0.0/0 → NAT Gateway to route table |
-| Public instance no internet access | Missing IGW route | Add 0.0.0.0/0 → IGW route |
-| Cannot SSH to private instance | No bastion host | Use bastion host in public subnet |
-| Isolated instance has internet | Wrong route table | Use main route table with no internet routes |
-| High NAT costs | Single NAT Gateway | Deploy NAT Gateway per AZ for HA |
-| Cross-AZ data charges | Wrong NAT routing | Route private subnets to NAT in same AZ |
+
+| Issue                              | Cause                     | Solution                                     |
+| ---------------------------------- | ------------------------- | -------------------------------------------- |
+| Private instance no internet       | Missing NAT Gateway route | Add 0.0.0.0/0 → NAT Gateway to route table   |
+| Public instance no internet access | Missing IGW route         | Add 0.0.0.0/0 → IGW route                    |
+| Cannot SSH to private instance     | No bastion host           | Use bastion host in public subnet            |
+| Isolated instance has internet     | Wrong route table         | Use main route table with no internet routes |
+| High NAT costs                     | Single NAT Gateway        | Deploy NAT Gateway per AZ for HA             |
+| Cross-AZ data charges              | Wrong NAT routing         | Route private subnets to NAT in same AZ      |
 
 ## Key Takeaways
+
 - Public subnets require route to Internet Gateway
 - Private subnets use NAT Gateway for outbound internet access
 - Isolated subnets have no internet connectivity
@@ -374,6 +421,7 @@ Internet
 - NAT Gateways should be deployed per AZ to avoid cross-AZ charges
 
 ## Best Practices
+
 - **Subnet Design**: Use descriptive naming and consistent tagging
 - **High Availability**: Deploy resources across multiple AZs
 - **Cost Optimization**: Use NAT Gateway per AZ to minimize data transfer charges
@@ -382,11 +430,13 @@ Internet
 - **Documentation**: Maintain network diagrams and IP allocation records
 
 ## Additional Resources
+
 - [VPC Subnets Documentation](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Subnets.html)
 - [NAT Gateways](https://docs.aws.amazon.com/vpc/latest/userguide/vpc-nat-gateway.html)
 - [Route Tables](https://docs.aws.amazon.com/vpc/latest/userguide/VPC_Route_Tables.html)
 
 ## Exam Tips
+
 - Public subnet = route to IGW, Private subnet = route to NAT, Isolated = no internet routes
 - Each subnet exists in exactly one AZ
 - Multiple subnets can share the same route table
