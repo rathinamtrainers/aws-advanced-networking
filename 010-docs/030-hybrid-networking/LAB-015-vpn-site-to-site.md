@@ -86,7 +86,9 @@ On-Premises Network ←→ Customer Gateway ←→ Internet ←→ AWS VPN Gatew
      - Target Gateway Type: Virtual Private Gateway
      - Virtual Private Gateway: Select your VGW
      - Customer Gateway: Existing → Select your customer gateway
-     - Routing Options: Dynamic (requires BGP)
+     - **Routing Options**: Choose based on complexity needs:
+       - **Static**: Simpler, manually configure routes (recommended for labs)
+       - **Dynamic**: Uses BGP, automatic route exchange (production environments)
      - Tunnel Options: Use default settings for both tunnels
 
 2. **Advanced Tunnel Configuration**
@@ -123,6 +125,8 @@ On-Premises Network ←→ Customer Gateway ←→ Internet ←→ AWS VPN Gatew
 ### Step 5: Simulate On-Premises Configuration
 For this lab, we'll use an EC2 instance to simulate the on-premises router.
 
+**IMPORTANT**: AWS VPN requires DH Group 2 (modp1024) support. Due to compatibility issues, use Ubuntu with StrongSwan instead of Amazon Linux with Libreswan.
+
 1. **Create "On-Premises" Simulation VPC**
    - Create a separate VPC: `OnPrem-Simulation-VPC`
    - CIDR: `192.168.0.0/16`
@@ -131,25 +135,66 @@ For this lab, we'll use an EC2 instance to simulate the on-premises router.
 
 2. **Launch Router Simulation Instance**
    - Launch EC2 instance in the simulation VPC:
-     - AMI: Amazon Linux 2
+     - **AMI: Ubuntu Server 22.04 LTS** (recommended for StrongSwan compatibility)
      - Instance Type: t3.small
      - Subnet: OnPrem public subnet
-     - Security Group: Allow UDP 500, 4500 and ICMP
-     - User Data Script:
+     - Security Group: Allow UDP 500, 4500, SSH (22), and ICMP
+     - Assign Elastic IP for consistent public IP
+
+3. **Install and Configure StrongSwan**
    ```bash
-   #!/bin/bash
-   yum update -y
-   yum install -y openswan
-   echo 'net.ipv4.ip_forward = 1' >> /etc/sysctl.conf
-   sysctl -p
+   # Update system
+   sudo apt update && sudo apt upgrade -y
+   
+   # Install StrongSwan
+   sudo apt install -y strongswan
+   
+   # Enable IP forwarding
+   echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.conf
+   sudo sysctl -p
    ```
 
-3. **Configure OpenSwan VPN**
-   - SSH to the simulation instance
-   - Create IPSec configuration based on downloaded config
-   - Configure both tunnels for redundancy
+4. **Configure StrongSwan for AWS VPN**
+   Create `/etc/ipsec.conf`:
+   ```bash
+   config setup
+       charondebug="ike 1, knl 1, cfg 0"
+       uniqueids=no
+
+   conn aws-tunnel-1
+       authby=secret
+       auto=start
+       left=%defaultroute
+       leftid=YOUR_ELASTIC_IP
+       right=AWS_TUNNEL_1_ENDPOINT
+       type=tunnel
+       ikelifetime=28800s
+       lifetime=3600s
+       ike=aes128-sha1-modp1024!
+       esp=aes128-sha1!
+       leftsubnet=192.168.0.0/16
+       rightsubnet=10.100.0.0/16
+       dpdaction=restart
+       dpddelay=10s
+       keyingtries=%forever
+   ```
+   
+   Create `/etc/ipsec.secrets`:
+   ```bash
+   YOUR_ELASTIC_IP AWS_TUNNEL_1_ENDPOINT : PSK "YOUR_PRE_SHARED_KEY"
+   ```
+   
+   **Note**: Replace placeholder values with actual IPs and keys from your downloaded VPN configuration.
+
+5. **Alternative: Static Routing Approach**
+   If BGP complexity is not needed, configure VPN connection with static routing:
+   - During VPN creation, select "Static" routing option
+   - Add static routes for on-premises CIDR (192.168.0.0/16)
+   - This simplifies configuration and avoids BGP complexity
 
 ### Step 6: Configure Routing
+
+#### Option A: Dynamic Routing (BGP)
 1. **Enable Route Propagation**
    - Navigate to **VPC** → **Route Tables**
    - Select route tables associated with your private subnets
@@ -162,6 +207,20 @@ For this lab, we'll use an EC2 instance to simulate the on-premises router.
    - In the route table, check **Routes** tab
    - You should see routes propagated from the VPN connection
    - Routes will appear once BGP sessions are established
+
+#### Option B: Static Routing (Recommended for Labs)
+1. **Add Static Routes**
+   - Navigate to **VPC** → **Route Tables**
+   - Select route tables associated with your private subnets
+   - Click **Routes** tab → **Edit routes**
+   - Add route:
+     - Destination: `192.168.0.0/16` (on-premises CIDR)
+     - Target: Virtual Private Gateway (your VGW)
+   - Save changes
+
+2. **Configure Static Routes in VPN Connection**
+   - In VPN connection, add static routes for on-premises networks
+   - This eliminates need for BGP configuration complexity
 
 ### Step 7: Test Connectivity
 1. **Launch Test Instances**
@@ -228,40 +287,103 @@ Complete these verification steps:
 1. **VPN Connection Status**
    - [ ] VPN connection shows "Available" state
    - [ ] Both tunnels show "UP" status
-   - [ ] BGP sessions are established
-   - [ ] Routes are being exchanged
+   - [ ] BGP sessions are established (if using dynamic routing)
+   - [ ] Routes are being exchanged (dynamic) or manually configured (static)
 
-2. **Connectivity Tests**
-   - [ ] Ping works from AWS to on-premises
+2. **IPSec Tunnel Verification**
+   ```bash
+   # On StrongSwan instance, verify tunnel status
+   sudo ipsec statusall
+   
+   # Check for active Child SAs (ESP tunnels)
+   sudo ipsec status
+   
+   # Verify XFRM policies are installed
+   ip xfrm policy show
+   ip xfrm state show
+   ```
+
+3. **Connectivity Tests**
+   - [ ] Phase 1 (IKE) tunnel establishes successfully
+   - [ ] Phase 2 (ESP) Child SAs are created
+   - [ ] Ping works from AWS to on-premises (expect ~2-5ms latency)
    - [ ] Ping works from on-premises to AWS
    - [ ] Application traffic flows correctly
    - [ ] Failover works when primary tunnel fails
 
-3. **Routing Verification**
-   - [ ] Route propagation is enabled
+4. **Routing Verification**
+   - [ ] Route propagation is enabled (dynamic routing)
+   - [ ] Static routes are configured (static routing)
    - [ ] On-premises routes appear in VPC route tables
-   - [ ] AWS routes are advertised to on-premises
-   - [ ] Traffic follows expected paths
+   - [ ] AWS routes are advertised to on-premises (dynamic) or reachable (static)
+   - [ ] Traffic follows expected paths (use `traceroute` to verify)
+   - [ ] No routing conflicts bypass IPSec tunnels
+
+5. **Performance Baseline**
+   - [ ] Establish baseline latency (typically 2-5ms for same region)
+   - [ ] Verify MTU discovery works correctly (try large ping packets)
+   - [ ] Monitor tunnel utilization in CloudWatch
 
 ## Troubleshooting Common Issues
+
+### DH Group Compatibility Issues
+**Error**: `NO_PROPOSAL_CHOSEN` during IKE negotiation
+**Cause**: IPSec software doesn't support DH Group 2 (modp1024) required by AWS
+**Solution**: 
+- Use Ubuntu 22.04 with StrongSwan instead of Amazon Linux with Libreswan
+- Verify `ike=aes128-sha1-modp1024!` in configuration
+- Check StrongSwan version supports legacy DH groups
 
 ### Tunnels Won't Establish
 - Check security groups allow UDP 500/4500
 - Verify public IP addresses are correct
-- Confirm pre-shared keys match
+- Confirm pre-shared keys match exactly (case-sensitive)
 - Review on-premises firewall rules
+- Ensure Elastic IP is assigned to customer gateway instance
+
+### Child SAs Not Established
+**Symptom**: IKE (Phase 1) connects but ESP tunnels (Phase 2) fail
+**Debug Commands**:
+```bash
+sudo ipsec statusall
+sudo ipsec restart
+ip xfrm state
+ip xfrm policy
+```
+**Solution**: Often resolved by restarting IPSec service after initial connection
 
 ### BGP Sessions Down
 - Verify BGP ASN configuration
 - Check inside IP address configuration
 - Confirm routing instance configuration
 - Review BGP authentication settings
+- **Alternative**: Use static routing to avoid BGP complexity
 
-### Connectivity Issues
-- Verify route propagation is enabled
-- Check security group rules
-- Confirm network ACL settings
-- Test with traceroute for path verification
+### Connectivity Issues After Tunnel Establishment
+**Symptom**: Tunnels show UP but ping fails
+**Debug Steps**:
+1. Check routing conflicts:
+   ```bash
+   ip route show
+   # Look for routes bypassing IPSec
+   ```
+2. Monitor traffic with tcpdump:
+   ```bash
+   sudo tcpdump -i any icmp
+   ```
+3. Remove conflicting routes:
+   ```bash
+   sudo ip route del 10.100.0.0/16 dev ens5
+   ```
+4. Verify XFRM policies are active:
+   ```bash
+   ip xfrm policy show
+   ```
+
+### Route Propagation vs Static Routes
+- **BGP/Dynamic**: Requires route propagation enabled in VPC route tables
+- **Static**: Routes must be manually added to VPC route tables
+- **Recommendation**: Use static routing for simpler lab environments
 
 ### Performance Problems
 - Monitor tunnel utilization
@@ -311,11 +433,15 @@ To avoid ongoing charges:
 
 ## Key Takeaways
 - Site-to-Site VPN provides secure connectivity over internet
+- **DH Group 2 (modp1024) compatibility is critical** - use StrongSwan on Ubuntu for reliable AWS VPN connectivity
+- **Static routing simplifies lab environments** while BGP provides production-grade dynamic routing
 - Redundant tunnels ensure high availability
-- BGP enables dynamic routing and automatic failover
+- **Child SA establishment is separate from IKE negotiation** - both phases must complete successfully
+- **Routing conflicts can bypass IPSec** - verify no direct routes conflict with tunnel traffic
 - Proper monitoring is essential for production deployments
 - Security groups and NACLs provide additional security layers
 - Cost scales with data transfer, not connection time
+- **IPSec restart often resolves Phase 2 negotiation issues**
 
 ## Next Steps
 - Proceed to Lab 16: VPN Tunneling and IPSec Deep Dive

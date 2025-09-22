@@ -23,9 +23,10 @@ AWS Site-to-Site VPN creates a secure connection between your on-premises networ
 #### Key Characteristics
 - **Encrypted Tunnels**: IPSec encryption for secure data transmission
 - **High Availability**: Two tunnels per VPN connection for redundancy
-- **Dynamic Routing**: BGP support for automatic route exchange
+- **Dynamic Routing**: BGP support for automatic route exchange (or static routing for simpler setups)
 - **Quick Setup**: Can be established in minutes vs weeks for Direct Connect
 - **Cost Effective**: Lower setup costs, pay-per-use model
+- **DH Group Requirements**: AWS VPN requires DH Group 2 (modp1024) support in customer equipment
 
 ### VPN Connection Components
 
@@ -37,15 +38,29 @@ AWS Site-to-Site VPN creates a secure connection between your on-premises networ
 
 #### 2. Customer Gateway
 - **Customer Side**: Physical device or software appliance on customer premises
-- **Public IP**: Must have static public IP address
-- **IPSec Support**: Must support IPSec tunneling
+- **Public IP**: Must have static public IP address (Elastic IP recommended for EC2-based solutions)
+- **IPSec Support**: Must support IPSec tunneling with specific AWS requirements:
+  - **IKE Version**: IKEv1 (default for AWS VPN)
+  - **DH Group**: Must support DH Group 2 (modp1024)
+  - **Encryption**: AES-128 or AES-256
+  - **Hash**: SHA-1 or SHA-256
 - **BGP Capability**: Optional but recommended for dynamic routing
+- **Software Recommendations**: 
+  - **StrongSwan** on Ubuntu (reliable DH Group 2 support)
+  - **Cisco ASA, ISR** (hardware solutions)
+  - **Avoid**: Libreswan on modern distributions (DH Group 2 compatibility issues)
 
 #### 3. VPN Connection
 - **Tunnel Pair**: Two IPSec tunnels for high availability
+- **Two-Phase Process**:
+  - **Phase 1 (IKE)**: Establishes secure channel for negotiation
+  - **Phase 2 (ESP)**: Creates Child SAs for actual data transmission
 - **Encryption**: AES-128, AES-256 encryption options
-- **Authentication**: Pre-shared keys or certificates
-- **Routing**: Static or dynamic (BGP) routing options
+- **Authentication**: Pre-shared keys (PSK) or certificates
+- **Routing Options**:
+  - **Static**: Manual route configuration, simpler for small environments
+  - **Dynamic (BGP)**: Automatic route exchange, better for complex topologies
+- **Common Issues**: Child SA establishment may require IPSec service restart
 
 ### VPN Architecture Components
 
@@ -849,8 +864,11 @@ echo "Troubleshooting steps:"
 echo "a) Check customer gateway public IP accessibility"
 echo "b) Verify IPSec parameters match AWS configuration"
 echo "c) Check firewall rules for IPSec traffic (UDP 500, 4500)"
-echo "d) Validate pre-shared keys"
+echo "d) Validate pre-shared keys (case-sensitive)"
 echo "e) Review customer gateway logs"
+echo "f) **CRITICAL**: Verify DH Group 2 (modp1024) support in IPSec software"
+echo "g) Use StrongSwan on Ubuntu instead of Libreswan for reliable compatibility"
+echo "h) Ensure IKEv1 is configured (AWS VPN default)"
 echo ""
 
 echo "ISSUE: BGP sessions not establishing"
@@ -861,6 +879,19 @@ echo "b) Check tunnel IP addressing"
 echo "c) Validate BGP timers"
 echo "d) Review BGP authentication"
 echo "e) Check route filters and prefix lists"
+echo "f) **ALTERNATIVE**: Consider static routing for simpler configurations"
+echo "g) Static routing eliminates BGP complexity and is suitable for most lab/small environments"
+echo ""
+echo ""
+echo "ISSUE: Child SAs (Phase 2) not establishing"
+echo "Symptoms: IKE (Phase 1) works but ESP tunnels fail, ping doesn't work"
+echo "Troubleshooting steps:"
+echo "a) Check Child SA status: sudo ipsec status"
+echo "b) Restart IPSec service: sudo ipsec restart"
+echo "c) Verify XFRM policies: ip xfrm policy show"
+echo "d) Check for routing conflicts bypassing IPSec"
+echo "e) Remove conflicting routes: ip route del <conflicting_route>"
+echo "f) Monitor traffic: sudo tcpdump -i any icmp"
 echo ""
 
 echo "ISSUE: Asymmetric routing"
@@ -889,6 +920,15 @@ show ip bgp summary
 show ip bgp neighbors
 debug crypto isakmp
 debug crypto ipsec
+
+StrongSwan (Ubuntu):
+sudo ipsec statusall
+sudo ipsec status
+ip xfrm state
+ip xfrm policy
+sudo ipsec restart
+sudo systemctl status strongswan-starter
+journalctl -u strongswan-starter -f
 
 Juniper:
 show security ike security-associations
