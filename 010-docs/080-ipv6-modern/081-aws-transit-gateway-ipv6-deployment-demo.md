@@ -84,37 +84,258 @@ IPv6_Network_Design:
     OnPremises_to_All: "allow"
 ```
 
-## Step-by-Step Deployment Demo
+## Hands-On Transit Gateway IPv6 Deployment
 
-### Step 1: Create Transit Gateway with IPv6 Support
+This section documents the complete hands-on deployment we performed, showing the actual steps and results from implementing Transit Gateway with IPv6 connectivity.
+
+### Real-World Implementation: Dual Environment Setup
+
+We implemented **two complete IPv6 Transit Gateway environments**:
+1. **Production Environment**: VPC-A (10.0.0.0/16) ↔ VPC-B (10.1.0.0/16)
+2. **Demo Environment**: Demo-VPC-A (10.10.0.0/16) ↔ Demo-VPC-B (10.11.0.0/16)
+
+### Step 1: Create VPCs with IPv6 CIDR Blocks
+
+**AWS Console Steps:**
+
+1. Go to **VPC Console** → **Your VPCs** → **Create VPC**
+2. Configure first VPC:
+   - **Name**: `IPv6-TGW-VPC-A`
+   - **IPv4 CIDR**: `10.0.0.0/16`
+   - **IPv6 CIDR block**: Select **Amazon-provided IPv6 CIDR block**
+   - **Tenancy**: Default
+
+3. Create second VPC:
+   - **Name**: `IPv6-TGW-VPC-B`
+   - **IPv4 CIDR**: `10.1.0.0/16`
+   - **IPv6 CIDR block**: Select **Amazon-provided IPv6 CIDR block**
+
+**Results from our implementation:**
+```bash
+# VPC verification
+aws ec2 describe-vpcs --filters "Name=cidr,Values=10.0.0.0/16,10.1.0.0/16" --output table
+
+# Output showed:
+# VPC-A: vpc-0eb79eb804c95ac20 | 10.0.0.0/16 | 2600:1f18:3352:e00::/56
+# VPC-B: vpc-0f0ed78002894f2fe | 10.1.0.0/16 | 2600:1f18:587b:1a00::/56
+```
+
+**Key Learning:** Each VPC receives a unique `/56` IPv6 block, providing 256 possible `/64` subnets per VPC.
+
+### Step 2: Create Dual-Stack Subnets
+
+**AWS Console Steps:**
+
+1. **VPC-A Subnet:**
+   - **VPC**: `IPv6-TGW-VPC-A`
+   - **Subnet name**: `VPC-A-Subnet`
+   - **IPv4 CIDR**: `10.0.1.0/24`
+   - **IPv6 CIDR**: `2600:1f18:3352:e01::/64` (first `/64` from VPC's `/56`)
+
+2. **VPC-B Subnet:**
+   - **VPC**: `IPv6-TGW-VPC-B`
+   - **Subnet name**: `VPC-B-Subnet`
+   - **IPv4 CIDR**: `10.1.1.0/24`
+   - **IPv6 CIDR**: `2600:1f18:587b:1a01::/64`
+
+3. **Enable Auto-Assign for Both:**
+   - Select subnet → **Actions** → **Edit subnet settings**
+   - ✅ **Auto-assign public IPv4 address**
+   - ✅ **Auto-assign IPv6 address**
+
+**IPv6 Subnet Structure Understanding:**
+```
+VPC CIDR:     2600:1f18:3352:e00::/56
+Subnet CIDR:  2600:1f18:3352:e01::/64
+                              ^^
+                        Subnet ID (01)
+```
+The last 2 hex digits before `::` represent the subnet ID within the VPC's `/56` allocation.
+
+### Step 3: Create Transit Gateway
+
+**AWS Console Steps:**
+
+1. Go to **VPC Console** → **Transit Gateways** → **Create transit gateway**
+2. Configure:
+   - **Name**: `IPv6-Demo-TGW`
+   - **Amazon side ASN**: `64512`
+   - **Default route table association**: `Enable`
+   - **Default route table propagation**: `Enable`
+   - **DNS support**: `Enable`
+
+**Verification:**
+```bash
+# Transit Gateway status
+aws ec2 describe-transit-gateways --transit-gateway-ids tgw-004afc54492872e90 --output table
+
+# Result: State = "available", ASN = 64512
+```
+
+### Step 4: Attach VPCs to Transit Gateway
+
+**AWS Console Steps:**
+
+1. **VPC-A Attachment:**
+   - Go to **Transit Gateway Attachments** → **Create attachment**
+   - **Name**: `VPC-A-Attachment`
+   - **Transit Gateway**: `IPv6-Demo-TGW`
+   - **VPC**: `IPv6-TGW-VPC-A`
+   - **Subnet**: `VPC-A-Subnet`
+
+2. **VPC-B Attachment:**
+   - **Name**: `VPC-B-Attachment`
+   - **Transit Gateway**: `IPv6-Demo-TGW`
+   - **VPC**: `IPv6-TGW-VPC-B`
+   - **Subnet**: `VPC-B-Subnet`
+
+**Verification Results:**
+```bash
+# Both attachments successful
+# VPC-A: tgw-attach-04550fae47c7a7a4b → "available"
+# VPC-B: tgw-attach-03bc8b7578427ab14 → "available"
+```
+
+### Step 5: Configure IPv6 Routing (Critical Step!)
+
+**Problem Discovered:** IPv4 routes auto-propagated, but IPv6 routes required manual configuration.
+
+#### 5A: Create IPv6 Static Routes in Transit Gateway
+
+**AWS Console Steps:**
+
+1. Go to **Transit Gateways** → **Route Tables** → Select default route table
+2. **Routes** tab → **Create static route**
+
+**Route 1:**
+- **CIDR**: `2600:1f18:3352:e00::/56` (VPC-A IPv6 range)
+- **Choose attachment**: `VPC-A-Attachment`
+
+**Route 2:**
+- **CIDR**: `2600:1f18:587b:1a00::/56` (VPC-B IPv6 range)
+- **Choose attachment**: `VPC-B-Attachment`
+
+#### 5B: Update VPC Route Tables (Critical for Inter-VPC Communication)
+
+**Key Discovery:** VPC route tables needed **subnet-level routes** (`/64`), not VPC-level routes (`/56`).
+
+**VPC-A Route Table Updates:**
+- `10.1.0.0/16` → `tgw-004afc54492872e90` (IPv4 to VPC-B)
+- `2600:1f18:587b:1a01::/64` → `tgw-004afc54492872e90` (IPv6 to VPC-B **subnet**)
+
+**VPC-B Route Table Updates:**
+- `10.0.0.0/16` → `tgw-004afc54492872e90` (IPv4 to VPC-A)
+- `2600:1f18:3352:e01::/64` → `tgw-004afc54492872e90` (IPv6 to VPC-A **subnet**)
+
+**Why /64 instead of /56?** Instances need specific subnet routes to know how to reach other subnets through Transit Gateway.
+
+### Step 6: Create Security Groups for Inter-VPC Communication
+
+**VPC-A Security Group:**
+```
+Inbound Rules:
+- SSH: Port 22, Source: 10.1.0.0/16 (VPC-B IPv4)
+- SSH: Port 22, Source: 2600:1f18:587b:1a00::/56 (VPC-B IPv6)
+- ICMP: All ICMP, Source: 10.1.0.0/16
+- ICMPv6: All ICMPv6, Source: 2600:1f18:587b:1a00::/56
+```
+
+**VPC-B Security Group:**
+```
+Inbound Rules:
+- SSH: Port 22, Source: 10.0.0.0/16 (VPC-A IPv4)
+- SSH: Port 22, Source: 2600:1f18:3352:e00::/56 (VPC-A IPv6)
+- ICMP: All ICMP, Source: 10.0.0.0/16
+- ICMPv6: All ICMPv6, Source: 2600:1f18:3352:e00::/56
+```
+
+### Step 7: Launch Test Instances
+
+**Instance Results:**
+```bash
+# VPC-A Instance: i-09bb9219a331347ce
+# - IPv4: 10.0.1.230
+# - IPv6: 2600:1f18:3352:e01:20db:7571:612e:318e
+
+# VPC-B Instance: i-0af58f82a37d96d40
+# - IPv4: 10.1.1.31
+# - IPv6: 2600:1f18:587b:1a01:920:6023:68a0:7db0
+```
+
+### Step 8: Test Inter-VPC IPv6 Connectivity
+
+**Successful Results:**
+
+**IPv4 Connectivity Test:**
+```bash
+[ec2-user@ip-10-0-1-230 ~]$ ping -c 4 10.1.1.31
+PING 10.1.1.31 (10.1.1.31) 56(84) bytes of data.
+64 bytes from 10.1.1.31: icmp_seq=1 ttl=126 time=1.75 ms
+64 bytes from 10.1.1.31: icmp_seq=2 ttl=126 time=0.572 ms
+# 100% success, TTL=126 indicates Transit Gateway routing
+```
+
+**IPv6 Connectivity Test:**
+```bash
+[ec2-user@ip-10-1-1-31 ~]$ ping6 -c 4 2600:1f18:3352:e01:20db:7571:612e:318e
+64 bytes from 2600:1f18:3352:e01:20db:7571:612e:318e: icmp_seq=1 ttl=63 time=1.04 ms
+64 bytes from 2600:1f18:3352:e01:20db:7571:612e:318e: icmp_seq=2 ttl=63 time=0.475 ms
+# 100% success, TTL=63 confirms Transit Gateway routing
+```
+
+### Demo Environment Implementation
+
+**Second Complete Environment Created:**
+
+**Demo VPCs:**
+- **Demo VPC-A**: `10.10.0.0/16` + `2600:1f18:239e:a200::/56`
+- **Demo VPC-B**: `10.11.0.0/16` + `2600:1f18:60a8:5a00::/56`
+
+**Demo Subnets:**
+- **Demo VPC-A Subnet**: `10.10.1.0/24` + `2600:1f18:239e:a201::/64`
+- **Demo VPC-B Subnet**: `10.11.1.0/24` + `2600:1f18:60a8:5a01::/64`
+
+**Demo Transit Gateway:** `Demo-IPv6-TGW` with ASN `64513`
+
+### Key Implementation Insights
+
+1. **IPv6 Route Propagation**: Unlike IPv4, IPv6 routes require **manual static configuration** in Transit Gateway route tables.
+
+2. **Subnet-Level Routing**: VPC route tables need `/64` subnet routes, not `/56` VPC-level routes for inter-VPC communication.
+
+3. **Security Groups**: Require separate rules for IPv4 and IPv6 - there's no automatic translation.
+
+4. **Address Assignment**: AWS automatically assigns IPv6 addresses from the `/64` subnet range with proper auto-configuration enabled.
+
+5. **Troubleshooting**: The most common issue was missing subnet-level routes in VPC route tables.
+
+### Verification Commands Used
 
 ```bash
-#!/bin/bash
-# Create Transit Gateway with IPv6 capabilities
+# VPC and subnet verification
+aws ec2 describe-vpcs --filters "Name=cidr,Values=10.0.0.0/16,10.1.0.0/16" --output table
+aws ec2 describe-subnets --filters "Name=cidr-block,Values=10.0.1.0/24,10.1.1.0/24" --output table
 
-echo "Creating Transit Gateway with IPv6 support..."
+# Transit Gateway verification
+aws ec2 describe-transit-gateways --transit-gateway-ids tgw-004afc54492872e90 --output table
+aws ec2 describe-transit-gateway-attachments --filters "Name=transit-gateway-id,Values=tgw-004afc54492872e90" --output table
 
-TGW_ID=$(aws ec2 create-transit-gateway \
-    --description "IPv6 Demo Transit Gateway" \
-    --options AmazonSideAsn=64512,AutoAcceptSharedAttachments=enable,DefaultRouteTableAssociation=enable,DefaultRouteTablePropagation=enable,DnsSupport=enable,VpnEcmpSupport=enable \
-    --tag-specifications 'ResourceType=transit-gateway,Tags=[{Key=Name,Value=IPv6-Demo-TGW},{Key=Environment,Value=Demo}]' \
-    --query 'TransitGateway.TransitGatewayId' \
-    --output text)
+# Route table verification
+aws ec2 search-transit-gateway-routes --transit-gateway-route-table-id tgw-rtb-0e3b7cddb8c4ebafb --filters Name=type,Values=static,propagated --output table
 
-echo "Transit Gateway created: $TGW_ID"
-
-# Wait for Transit Gateway to become available
-echo "Waiting for Transit Gateway to become available..."
-aws ec2 wait transit-gateway-available --transit-gateway-ids $TGW_ID
-
-# Get default route table ID
-DEFAULT_RT_ID=$(aws ec2 describe-transit-gateways \
-    --transit-gateway-ids $TGW_ID \
-    --query 'TransitGateways[0].Options.DefaultRouteTableId' \
-    --output text)
-
-echo "Default Route Table: $DEFAULT_RT_ID"
+# Instance verification
+aws ec2 describe-instances --filters "Name=vpc-id,Values=vpc-0eb79eb804c95ac20,vpc-0f0ed78002894f2fe" --output table
 ```
+
+### Architecture Achievement
+
+✅ **Complete dual-stack inter-VPC connectivity**
+✅ **Two isolated Transit Gateway environments**
+✅ **IPv6 routing through centralized hub**
+✅ **No NAT required for IPv6 traffic**
+✅ **Enterprise-ready scalable architecture**
+
+This hands-on implementation demonstrates production-ready IPv6 Transit Gateway connectivity with all the complexities and solutions encountered in real-world deployments.
 
 ### Step 2: Create IPv6-Enabled VPCs
 
