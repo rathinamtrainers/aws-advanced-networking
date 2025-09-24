@@ -229,42 +229,231 @@ aws ec2 describe-transit-gateways --transit-gateway-ids tgw-004afc54492872e90 --
 
 **Why /64 instead of /56?** Instances need specific subnet routes to know how to reach other subnets through Transit Gateway.
 
-### Step 6: Create Security Groups for Inter-VPC Communication
+### Step 6: Add Internet Connectivity for External Access
+
+**Critical for Testing:** To connect from your laptop and test Transit Gateway functionality, both VPCs need Internet Gateways and proper routing.
+
+#### 6A: Create Internet Gateways
+
+**For VPC-A:**
+1. Go to **VPC Console** → **Internet Gateways** → **Create internet gateway**
+2. Configure:
+   - **Name**: `VPC-A-IGW`
+3. Click **Create internet gateway**
+4. Select the IGW → **Actions** → **Attach to VPC**
+5. Select `IPv6-TGW-VPC-A` → **Attach internet gateway**
+
+**For VPC-B:**
+1. **Create internet gateway** again
+2. Configure:
+   - **Name**: `VPC-B-IGW`
+3. **Create** → **Attach to VPC** → Select `IPv6-TGW-VPC-B`
+
+#### 6B: Update Route Tables for Internet Access
+
+**VPC-A Route Table:**
+1. Go to **Route Tables** → Find route table for `IPv6-TGW-VPC-A`
+2. **Edit routes** → **Add routes**:
+   - **Destination**: `0.0.0.0/0` → **Target**: `VPC-A-IGW`
+   - **Destination**: `::/0` → **Target**: `VPC-A-IGW`
+3. **Save changes**
+
+**VPC-B Route Table:**
+1. Find route table for `IPv6-TGW-VPC-B`
+2. **Edit routes** → **Add routes**:
+   - **Destination**: `0.0.0.0/0` → **Target**: `VPC-B-IGW`
+   - **Destination**: `::/0` → **Target**: `VPC-B-IGW`
+3. **Save changes**
+
+**Final VPC Route Table Structure:**
+```
+VPC-A Route Table:
+- 10.0.0.0/16 → local
+- 10.1.0.0/16 → tgw-004afc54492872e90 (to VPC-B)
+- 0.0.0.0/0 → VPC-A-IGW (internet access)
+- 2600:1f18:3352:e00::/56 → local
+- 2600:1f18:587b:1a01::/64 → tgw-004afc54492872e90 (to VPC-B subnet)
+- ::/0 → VPC-A-IGW (IPv6 internet access)
+
+VPC-B Route Table:
+- 10.1.0.0/16 → local
+- 10.0.0.0/16 → tgw-004afc54492872e90 (to VPC-A)
+- 0.0.0.0/0 → VPC-B-IGW (internet access)
+- 2600:1f18:587b:1a00::/56 → local
+- 2600:1f18:3352:e01::/64 → tgw-004afc54492872e90 (to VPC-A subnet)
+- ::/0 → VPC-B-IGW (IPv6 internet access)
+```
+
+### Step 7: Create Security Groups for Inter-VPC Communication
 
 **VPC-A Security Group:**
 ```
 Inbound Rules:
+- SSH: Port 22, Source: 0.0.0.0/0 (for laptop access)
+- SSH: Port 22, Source: ::/0 (for IPv6 laptop access)
 - SSH: Port 22, Source: 10.1.0.0/16 (VPC-B IPv4)
 - SSH: Port 22, Source: 2600:1f18:587b:1a00::/56 (VPC-B IPv6)
+- ICMP: All ICMP, Source: 0.0.0.0/0 (for ping testing)
 - ICMP: All ICMP, Source: 10.1.0.0/16
+- ICMPv6: All ICMPv6, Source: ::/0 (for IPv6 ping testing)
 - ICMPv6: All ICMPv6, Source: 2600:1f18:587b:1a00::/56
 ```
 
 **VPC-B Security Group:**
 ```
 Inbound Rules:
+- SSH: Port 22, Source: 0.0.0.0/0 (for laptop access)
+- SSH: Port 22, Source: ::/0 (for IPv6 laptop access)
 - SSH: Port 22, Source: 10.0.0.0/16 (VPC-A IPv4)
 - SSH: Port 22, Source: 2600:1f18:3352:e00::/56 (VPC-A IPv6)
+- ICMP: All ICMP, Source: 0.0.0.0/0 (for ping testing)
 - ICMP: All ICMP, Source: 10.0.0.0/16
+- ICMPv6: All ICMPv6, Source: ::/0 (for IPv6 ping testing)
 - ICMPv6: All ICMPv6, Source: 2600:1f18:3352:e00::/56
 ```
 
-### Step 7: Launch Test Instances
+**Security Note:** In production, replace `0.0.0.0/0` and `::/0` with your specific IP ranges for better security.
+
+### Step 8: Launch Test Instances
+
+**AWS Console Steps:**
+
+1. Go to **EC2 Console** → **Launch instances**
+2. **VPC-A Instance Configuration:**
+   - **Name**: `VPC-A-Test-Instance`
+   - **AMI**: Amazon Linux 2023
+   - **Instance type**: t2.micro
+   - **Key pair**: Select your existing key pair
+   - **VPC**: `IPv6-TGW-VPC-A`
+   - **Subnet**: `VPC-A-Subnet` (will auto-assign both IPv4 and IPv6)
+   - **Security groups**: Select `VPC-A-TGW-SG`
+
+3. **VPC-B Instance Configuration:**
+   - **Name**: `VPC-B-Test-Instance`
+   - **AMI**: Amazon Linux 2023
+   - **Instance type**: t2.micro
+   - **Key pair**: Same key pair
+   - **VPC**: `IPv6-TGW-VPC-B`
+   - **Subnet**: `VPC-B-Subnet` (will auto-assign both IPv4 and IPv6)
+   - **Security groups**: Select `VPC-B-TGW-SG`
 
 **Instance Results:**
 ```bash
 # VPC-A Instance: i-09bb9219a331347ce
-# - IPv4: 10.0.1.230
+# - Private IPv4: 10.0.1.230
+# - Public IPv4: 54.196.38.254 (for laptop SSH access)
 # - IPv6: 2600:1f18:3352:e01:20db:7571:612e:318e
 
 # VPC-B Instance: i-0af58f82a37d96d40
-# - IPv4: 10.1.1.31
+# - Private IPv4: 10.1.1.31
+# - Public IPv4: 13.217.99.46 (for laptop SSH access)
 # - IPv6: 2600:1f18:587b:1a01:920:6023:68a0:7db0
 ```
 
-### Step 8: Test Inter-VPC IPv6 Connectivity
+### Step 9: Test Inter-VPC IPv6 Connectivity from Your Laptop
 
-**Successful Results:**
+**Connect to Instances from Your Laptop:**
+
+```bash
+# SSH to VPC-A instance
+ssh -i your-key.pem ec2-user@54.196.38.254
+
+# SSH to VPC-B instance (separate terminal)
+ssh -i your-key.pem ec2-user@13.217.99.46
+```
+
+### Step 10: Test Transit Gateway Use Cases
+
+**From VPC-A Instance (SSH to 54.196.38.254):**
+
+```bash
+# 1. Test IPv4 inter-VPC connectivity through Transit Gateway
+ping -c 4 10.1.1.31
+# Expected: 100% success with TTL=126 (2 hops via TGW)
+
+# 2. Test IPv6 inter-VPC connectivity through Transit Gateway
+ping6 -c 4 2600:1f18:587b:1a01:920:6023:68a0:7db0
+# Expected: 100% success with TTL=63
+
+# 3. Show your dual-stack addresses
+ip addr show ens5
+# Shows both IPv4 (10.0.1.x) and IPv6 (2600:1f18:3352:e01:x)
+
+# 4. Check IPv6 routing table
+ip -6 route show
+# Shows routes including Transit Gateway route to other VPC
+
+# 5. Test traceroute to see Transit Gateway path
+traceroute 10.1.1.31
+# Shows path: instance -> TGW -> destination
+
+# 6. Test IPv6 traceroute
+traceroute6 2600:1f18:587b:1a01:920:6023:68a0:7db0
+```
+
+**From VPC-B Instance (SSH to 13.217.99.46):**
+
+```bash
+# 1. Test reverse IPv4 connectivity
+ping -c 4 10.0.1.230
+
+# 2. Test reverse IPv6 connectivity
+ping6 -c 4 2600:1f18:3352:e01:20db:7571:612e:318e
+
+# 3. Show neighbor discovery in action
+ip -6 neigh show
+# Shows IPv6 neighbor discovery entries
+
+# 4. Test SSH between instances via private IPs
+ssh ec2-user@10.0.1.230
+# Should work using private IPv4 through Transit Gateway
+
+# 5. Test SSH between instances via IPv6
+ssh ec2-user@2600:1f18:3352:e01:20db:7571:612e:318e
+# Should work using IPv6 through Transit Gateway
+```
+
+**Advanced Transit Gateway Testing:**
+
+```bash
+# From either instance:
+
+# 1. Test bandwidth between VPCs
+iperf3 -s  # On one instance
+iperf3 -c 10.1.1.31 -t 30  # On other instance
+
+# 2. Monitor Transit Gateway metrics
+# (Run from your laptop with AWS CLI)
+aws cloudwatch get-metric-statistics \
+    --namespace AWS/TransitGateway \
+    --metric-name BytesIn \
+    --dimensions Name=TransitGateway,Value=tgw-004afc54492872e90 \
+    --start-time 2023-12-01T00:00:00Z \
+    --end-time 2023-12-01T23:59:59Z \
+    --period 300 \
+    --statistics Sum
+
+# 3. Test different protocols
+nc -l 8080  # TCP listener on one instance
+nc 10.1.1.31 8080  # TCP client on other instance
+
+# 4. Test UDP traffic
+nc -u -l 8080  # UDP listener
+nc -u 10.1.1.31 8080  # UDP client
+```
+
+**Transit Gateway Use Cases Demonstrated:**
+
+1. **Inter-VPC Communication**: Both IPv4 and IPv6 traffic flows through TGW
+2. **Centralized Routing**: Single point for managing multi-VPC connectivity
+3. **Protocol Support**: TCP, UDP, ICMP, and ICMPv6 all work through TGW
+4. **Dual-Stack Operation**: Simultaneous IPv4 and IPv6 routing
+5. **Low Latency**: Sub-millisecond inter-VPC communication
+6. **High Throughput**: Multi-Gbps bandwidth capacity
+7. **Security**: Traffic between VPCs is controlled by security groups
+8. **Monitoring**: CloudWatch metrics for traffic analysis
+
+**Successful Test Results:**
 
 **IPv4 Connectivity Test:**
 ```bash
