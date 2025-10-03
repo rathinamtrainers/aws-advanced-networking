@@ -1,0 +1,1 @@
+{"statusCode": 405, "headers": {"Content-Type": "application/json", "Access-Control-Allow-Origin": "*"}, "body": "{\"message\": \"HTTP method not allowed\"}"}
