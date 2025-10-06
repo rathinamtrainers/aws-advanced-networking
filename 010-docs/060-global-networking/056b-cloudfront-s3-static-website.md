@@ -1191,6 +1191,162 @@ An error occurred (NoSuchBucket) when calling the ListObjectsV2 operation
 
 ---
 
+### Cost Analysis
+
+**Monthly Cost Estimate for CloudFront + S3 Static Website**
+
+#### Assumptions (Small Static Website):
+- Website size: 100 MB total content
+- Traffic: 10,000 page views/month
+- Average page size: 500 KB (HTML, CSS, JS, images)
+- Total data transfer: ~5 GB/month
+- Region: US/Europe
+
+#### Cost Breakdown:
+
+**1. Amazon S3 Storage:**
+- Storage: 0.1 GB × $0.023/GB = **$0.002/month**
+- PUT requests: 10 files × $0.005/1,000 = **~$0.00**
+- GET requests (cached by CloudFront): **~$0.00**
+
+**2. Amazon CloudFront:**
+- Data transfer out: 5 GB × $0.085/GB = **$0.425**
+  - *First 1 TB free with AWS Free Tier*
+- HTTPS requests: 10,000 × $0.01/10,000 = **$0.001**
+  - *First 10M requests free with AWS Free Tier*
+
+**3. AWS Certificate Manager (ACM):**
+- SSL/TLS certificate for custom domain = **FREE**
+
+**4. Amazon Route 53 (Optional - Custom Domain):**
+- Hosted zone: **$0.50/month**
+- DNS queries: 10,000 × $0.40/million = **~$0.004**
+
+#### Total Monthly Cost:
+
+**With AWS Free Tier (First 12 months):**
+```
+S3 Storage:        $0.00  (under 5 GB free tier)
+CloudFront:        $0.00  (under 1 TB + 10M requests free)
+ACM Certificate:   $0.00  (always free)
+Route 53:          $0.50  (hosted zone + queries)
+────────────────────────
+TOTAL:            ~$0.50/month
+```
+
+**Without AWS Free Tier (After 12 months):**
+```
+S3 Storage:        $0.002
+CloudFront:        $0.426
+ACM Certificate:   $0.00
+Route 53:          $0.504
+────────────────────────
+TOTAL:            ~$0.93/month
+```
+
+#### Cost Scaling by Traffic Level:
+
+| Traffic Level | Page Views/Month | Data Transfer | S3 Cost | CloudFront Cost | Route 53 | **Total/Month** |
+|---------------|------------------|---------------|---------|-----------------|----------|-----------------|
+| **Low** | 10,000 | 5 GB | $0.002 | $0.43 | $0.50 | **$0.93** |
+| **Medium** | 100,000 | 50 GB | $0.002 | $4.25 | $0.50 | **$4.75** |
+| **High** | 1,000,000 | 500 GB | $0.005 | $42.50 | $0.50 | **$43.01** |
+| **Very High** | 10,000,000 | 5 TB | $0.015 | $425.00 | $0.50 | **$425.52** |
+
+*Note: Prices assume US/Europe regions and no Free Tier. Actual costs may vary by region.*
+
+#### Cost Optimization Strategies:
+
+**1. Maximize Free Tier Benefits:**
+- AWS Free Tier includes 1 TB CloudFront data transfer
+- 10 million HTTPS requests per month
+- 5 GB S3 storage (first 12 months)
+- Perfect for development and low-traffic sites
+
+**2. Enable Compression:**
+- CloudFront automatic compression reduces transfer by 60-80%
+- Enable in CloudFront distribution settings
+- Works for HTML, CSS, JS, JSON, XML
+
+**3. Optimize Content:**
+- Compress images (WebP format saves 25-35% vs JPEG)
+- Minify CSS/JS files
+- Use responsive images with srcset
+- Remove unused code and assets
+
+**4. Configure Longer Cache TTLs:**
+- Static assets (CSS/JS/images): 1-7 days
+- Reduces origin requests to S3
+- Lower S3 GET request charges
+- Use versioned file names (e.g., `app.v2.css`) instead of invalidations
+
+**5. Use CloudFront Price Classes:**
+- **All edge locations**: Best performance, highest cost
+- **Price Class 200**: Excludes most expensive regions, moderate cost
+- **Price Class 100**: US, Europe, Israel only, lowest cost
+- Can save 15-30% on data transfer
+
+**6. Avoid Invalidation Costs:**
+- First 1,000 invalidation paths free/month
+- $0.005 per path after that
+- Use versioned file names instead: `style.v2.css`, `app.123abc.js`
+- Automate versioning in build process
+
+**7. Monitor and Analyze:**
+- Use CloudWatch metrics to track usage
+- Set up billing alarms
+- Review CloudFront reports monthly
+- Identify and optimize high-traffic assets
+
+**8. Regional Considerations:**
+- US/Europe data transfer: $0.085/GB
+- Asia Pacific: $0.140/GB
+- India: $0.170/GB
+- Consider price classes to exclude expensive regions
+
+#### Cost Comparison with Alternatives:
+
+| Solution | Monthly Cost (10K views) | Monthly Cost (100K views) | HTTPS | CDN |
+|----------|--------------------------|---------------------------|-------|-----|
+| **S3 + CloudFront** | $0.93 | $4.75 | ✅ Free | ✅ Global |
+| **S3 Static Website Only** | $0.10 | $1.00 | ❌ No | ❌ No |
+| **EC2 t3.micro + NGINX** | $8.50 | $8.50 | ✅ ACM | ❌ No |
+| **Shared Hosting** | $5-15 | $5-15 | ✅ Varies | ❌ Limited |
+| **Netlify Free Tier** | $0 | $0 | ✅ Free | ✅ Yes |
+| **Vercel Free Tier** | $0 | $0 | ✅ Free | ✅ Yes |
+
+**Recommendation:** For personal blogs and small business sites with <100K monthly visitors, CloudFront + S3 offers excellent value with professional features (global CDN, HTTPS, custom domain) at <$5/month.
+
+#### Hidden Costs to Watch:
+
+1. **Invalidation Overuse**: Stick to 1,000 paths/month or use versioning
+2. **Field-Level Encryption**: Additional charges if enabled
+3. **Lambda@Edge**: $0.60 per million requests + compute time
+4. **Real-Time Logs**: Additional CloudWatch Logs charges
+5. **Origin Shield**: $0.01/10K requests (optional caching layer)
+6. **Reserved Capacity**: Commit to usage for discounts (enterprise only)
+
+#### Billing Examples:
+
+**Example 1: Personal Blog (rapidgrasp.com)**
+- 5,000 monthly visitors
+- 2 GB data transfer
+- **Cost: $0.50-$0.70/month** (mostly Route 53)
+
+**Example 2: Small Business Website**
+- 50,000 monthly visitors
+- 25 GB data transfer
+- **Cost: $2.50-$3.00/month**
+
+**Example 3: Popular Documentation Site**
+- 500,000 monthly visitors
+- 250 GB data transfer
+- **Cost: $21-$22/month**
+
+**For rapidgrasp.com with typical low-medium traffic, expect $0.50-$5/month.**
+
+---
+
 ### Key Takeaways
 
 - **S3 + CloudFront = Global Static Hosting**: S3 stores files, CloudFront distributes them globally with low latency
