@@ -569,6 +569,947 @@ aws ec2 describe-vpcs --filters "Name=tag:Name,Values=iac-demo-vpc" --query 'Vpc
 
 ---
 
+## Part 5: AWS CDK Implementation
+
+### CDK Project Setup
+
+**Install AWS CDK**:
+```bash
+npm install -g aws-cdk
+cdk --version
+```
+
+**Create CDK Project**:
+```bash
+mkdir iac-demo-cdk
+cd iac-demo-cdk
+cdk init app --language typescript
+npm install @aws-cdk/aws-ec2 @aws-cdk/aws-logs
+```
+
+### CDK Code - TypeScript Implementation
+
+**File: `lib/iac-demo-cdk-stack.ts`**:
+```typescript
+import * as cdk from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as logs from 'aws-cdk-lib/aws-logs';
+
+export class IacDemoCdkStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
+
+    // Define VPC with high-level construct
+    const vpc = new ec2.Vpc(this, 'IacDemoVpc', {
+      vpcName: 'iac-demo-vpc',
+      ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
+      maxAzs: 2,
+      natGateways: 1,
+
+      // Define subnet configuration
+      subnetConfiguration: [
+        {
+          name: 'Public',
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+        {
+          name: 'Private',
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          cidrMask: 24,
+        },
+      ],
+
+      // Enable DNS
+      enableDnsHostnames: true,
+      enableDnsSupport: true,
+    });
+
+    // Add VPC Flow Logs
+    const logGroup = new logs.LogGroup(this, 'VpcFlowLogsGroup', {
+      logGroupName: '/aws/vpc/flowlogs/iac-demo',
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new ec2.FlowLog(this, 'VpcFlowLog', {
+      resourceType: ec2.FlowLogResourceType.fromVpc(vpc),
+      destination: ec2.FlowLogDestination.toCloudWatchLogs(logGroup),
+      trafficType: ec2.FlowLogTrafficType.ALL,
+    });
+
+    // Create Web Tier Security Group
+    const webSecurityGroup = new ec2.SecurityGroup(this, 'WebSecurityGroup', {
+      vpc,
+      securityGroupName: 'iac-demo-web-sg',
+      description: 'Security group for web servers',
+      allowAllOutbound: true,
+    });
+
+    webSecurityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(80),
+      'Allow HTTP from anywhere'
+    );
+
+    webSecurityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(443),
+      'Allow HTTPS from anywhere'
+    );
+
+    webSecurityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(22),
+      'Allow SSH from anywhere (restrict in production)'
+    );
+
+    // Create App Tier Security Group
+    const appSecurityGroup = new ec2.SecurityGroup(this, 'AppSecurityGroup', {
+      vpc,
+      securityGroupName: 'iac-demo-app-sg',
+      description: 'Security group for application servers',
+      allowAllOutbound: true,
+    });
+
+    appSecurityGroup.addIngressRule(
+      webSecurityGroup,
+      ec2.Port.tcp(8080),
+      'Allow traffic from web tier'
+    );
+
+    // Add tags
+    cdk.Tags.of(vpc).add('Environment', 'Demo');
+    cdk.Tags.of(vpc).add('ManagedBy', 'CDK');
+
+    // Outputs
+    new cdk.CfnOutput(this, 'VpcId', {
+      value: vpc.vpcId,
+      description: 'VPC ID',
+      exportName: 'IacDemoVpcId',
+    });
+
+    new cdk.CfnOutput(this, 'VpcCidr', {
+      value: vpc.vpcCidrBlock,
+      description: 'VPC CIDR Block',
+    });
+
+    new cdk.CfnOutput(this, 'PublicSubnetIds', {
+      value: vpc.publicSubnets.map(subnet => subnet.subnetId).join(','),
+      description: 'Public Subnet IDs',
+    });
+
+    new cdk.CfnOutput(this, 'PrivateSubnetIds', {
+      value: vpc.privateSubnets.map(subnet => subnet.subnetId).join(','),
+      description: 'Private Subnet IDs',
+    });
+
+    new cdk.CfnOutput(this, 'WebSecurityGroupId', {
+      value: webSecurityGroup.securityGroupId,
+      description: 'Web Security Group ID',
+    });
+
+    new cdk.CfnOutput(this, 'AppSecurityGroupId', {
+      value: appSecurityGroup.securityGroupId,
+      description: 'App Security Group ID',
+    });
+  }
+}
+```
+
+### CDK Deployment Commands
+
+**1. Bootstrap CDK (first time only)**:
+```bash
+cdk bootstrap
+```
+
+**2. Synthesize CloudFormation template**:
+```bash
+cdk synth
+```
+
+**3. View changes before deployment**:
+```bash
+cdk diff
+```
+
+**4. Deploy the stack**:
+```bash
+cdk deploy
+```
+
+**Expected output**:
+```
+IacDemoCdkStack: deploying...
+IacDemoCdkStack: creating CloudFormation changeset...
+
+✅  IacDemoCdkStack
+
+Outputs:
+IacDemoCdkStack.VpcId = vpc-xxxxxxxxx
+IacDemoCdkStack.VpcCidr = 10.0.0.0/16
+IacDemoCdkStack.PublicSubnetIds = subnet-xxxxx,subnet-yyyyy
+IacDemoCdkStack.PrivateSubnetIds = subnet-aaaaa,subnet-bbbbb
+IacDemoCdkStack.WebSecurityGroupId = sg-xxxxxxxxx
+IacDemoCdkStack.AppSecurityGroupId = sg-yyyyyyyyy
+
+Stack ARN:
+arn:aws:cloudformation:us-east-1:123456789012:stack/IacDemoCdkStack/xxxxxxxx
+```
+
+**5. Verify deployment**:
+```bash
+# Get VPC ID from CDK output
+export VPC_ID=$(aws cloudformation describe-stacks --stack-name IacDemoCdkStack --query 'Stacks[0].Outputs[?OutputKey==`VpcId`].OutputValue' --output text)
+
+# Run verification script from Part 2
+./verify-network-config.sh
+```
+
+**6. Destroy the stack**:
+```bash
+cdk destroy
+```
+
+### Advanced CDK - Parameterized Stack
+
+**File: `lib/iac-demo-parameterized-stack.ts`**:
+```typescript
+import * as cdk from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as logs from 'aws-cdk-lib/aws-logs';
+
+export interface NetworkStackProps extends cdk.StackProps {
+  environment: string;
+  vpcCidr: string;
+  maxAzs: number;
+  natGateways: number;
+}
+
+export class NetworkStack extends cdk.Stack {
+  public readonly vpc: ec2.Vpc;
+
+  constructor(scope: Construct, id: string, props: NetworkStackProps) {
+    super(scope, id, props);
+
+    // Create VPC
+    this.vpc = new ec2.Vpc(this, 'Vpc', {
+      vpcName: `${props.environment}-vpc`,
+      ipAddresses: ec2.IpAddresses.cidr(props.vpcCidr),
+      maxAzs: props.maxAzs,
+      natGateways: props.natGateways,
+
+      subnetConfiguration: [
+        {
+          name: 'Public',
+          subnetType: ec2.SubnetType.PUBLIC,
+          cidrMask: 24,
+        },
+        {
+          name: 'Private',
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          cidrMask: 24,
+        },
+        {
+          name: 'Isolated',
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          cidrMask: 24,
+        },
+      ],
+    });
+
+    // Flow Logs
+    const logGroup = new logs.LogGroup(this, 'FlowLogs', {
+      logGroupName: `/aws/vpc/flowlogs/${props.environment}`,
+      retention: logs.RetentionDays.ONE_WEEK,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    new ec2.FlowLog(this, 'VpcFlowLog', {
+      resourceType: ec2.FlowLogResourceType.fromVpc(this.vpc),
+      destination: ec2.FlowLogDestination.toCloudWatchLogs(logGroup),
+    });
+
+    // Tags
+    cdk.Tags.of(this).add('Environment', props.environment);
+    cdk.Tags.of(this).add('ManagedBy', 'CDK');
+  }
+}
+```
+
+**File: `bin/iac-demo-cdk.ts`**:
+```typescript
+#!/usr/bin/env node
+import 'source-map-support/register';
+import * as cdk from 'aws-cdk-lib';
+import { NetworkStack } from '../lib/iac-demo-parameterized-stack';
+
+const app = new cdk.App();
+
+// Development environment
+new NetworkStack(app, 'DevNetworkStack', {
+  environment: 'dev',
+  vpcCidr: '10.0.0.0/16',
+  maxAzs: 2,
+  natGateways: 1,
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+});
+
+// Production environment
+new NetworkStack(app, 'ProdNetworkStack', {
+  environment: 'prod',
+  vpcCidr: '10.1.0.0/16',
+  maxAzs: 3,
+  natGateways: 3, // One per AZ for HA
+  env: {
+    account: process.env.CDK_DEFAULT_ACCOUNT,
+    region: process.env.CDK_DEFAULT_REGION,
+  },
+});
+```
+
+**Deploy specific environment**:
+```bash
+# Deploy dev only
+cdk deploy DevNetworkStack
+
+# Deploy prod only
+cdk deploy ProdNetworkStack
+
+# Deploy all
+cdk deploy --all
+```
+
+---
+
+## Part 6: Terraform Implementation
+
+### Terraform Project Setup
+
+**Install Terraform**:
+```bash
+# Download from https://www.terraform.io/downloads
+# Or use package manager
+# macOS: brew install terraform
+# Windows: choco install terraform
+
+terraform --version
+```
+
+**Create Terraform Project**:
+```bash
+mkdir iac-demo-terraform
+cd iac-demo-terraform
+```
+
+### Terraform Code - HCL Implementation
+
+**File: `main.tf`**:
+```hcl
+terraform {
+  required_version = ">= 1.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+# VPC
+resource "aws_vpc" "main" {
+  cidr_block           = var.vpc_cidr
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-vpc"
+    }
+  )
+}
+
+# Internet Gateway
+resource "aws_internet_gateway" "main" {
+  vpc_id = aws_vpc.main.id
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-igw"
+    }
+  )
+}
+
+# Public Subnets
+resource "aws_subnet" "public" {
+  count = length(var.availability_zones)
+
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, count.index)
+  availability_zone       = var.availability_zones[count.index]
+  map_public_ip_on_launch = true
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-public-${var.availability_zones[count.index]}"
+      Type = "Public"
+    }
+  )
+}
+
+# Private Subnets
+resource "aws_subnet" "private" {
+  count = length(var.availability_zones)
+
+  vpc_id            = aws_vpc.main.id
+  cidr_block        = cidrsubnet(var.vpc_cidr, 8, count.index + 10)
+  availability_zone = var.availability_zones[count.index]
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-private-${var.availability_zones[count.index]}"
+      Type = "Private"
+    }
+  )
+}
+
+# Elastic IP for NAT Gateway
+resource "aws_eip" "nat" {
+  count  = var.nat_gateway_count
+  domain = "vpc"
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-nat-eip-${count.index + 1}"
+    }
+  )
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+# NAT Gateway
+resource "aws_nat_gateway" "main" {
+  count = var.nat_gateway_count
+
+  allocation_id = aws_eip.nat[count.index].id
+  subnet_id     = aws_subnet.public[count.index].id
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-nat-${var.availability_zones[count.index]}"
+    }
+  )
+
+  depends_on = [aws_internet_gateway.main]
+}
+
+# Public Route Table
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-public-rt"
+    }
+  )
+}
+
+# Public Route Table Association
+resource "aws_route_table_association" "public" {
+  count = length(aws_subnet.public)
+
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+
+# Private Route Table
+resource "aws_route_table" "private" {
+  count = var.nat_gateway_count
+
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.main[count.index].id
+  }
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-private-rt-${count.index + 1}"
+    }
+  )
+}
+
+# Private Route Table Association
+resource "aws_route_table_association" "private" {
+  count = length(aws_subnet.private)
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private[count.index % var.nat_gateway_count].id
+}
+
+# Web Security Group
+resource "aws_security_group" "web" {
+  name        = "${var.environment}-web-sg"
+  description = "Security group for web servers"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description = "HTTP from anywhere"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "HTTPS from anywhere"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "SSH from anywhere"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-web-sg"
+    }
+  )
+}
+
+# App Security Group
+resource "aws_security_group" "app" {
+  name        = "${var.environment}-app-sg"
+  description = "Security group for application servers"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    description     = "App port from web tier"
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [aws_security_group.web.id]
+  }
+
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-app-sg"
+    }
+  )
+}
+
+# VPC Flow Logs
+resource "aws_flow_log" "main" {
+  vpc_id          = aws_vpc.main.id
+  traffic_type    = "ALL"
+  iam_role_arn    = aws_iam_role.flow_logs.arn
+  log_destination = aws_cloudwatch_log_group.flow_logs.arn
+
+  tags = merge(
+    var.common_tags,
+    {
+      Name = "${var.environment}-flow-logs"
+    }
+  )
+}
+
+# CloudWatch Log Group for Flow Logs
+resource "aws_cloudwatch_log_group" "flow_logs" {
+  name              = "/aws/vpc/flowlogs/${var.environment}"
+  retention_in_days = 7
+
+  tags = var.common_tags
+}
+
+# IAM Role for Flow Logs
+resource "aws_iam_role" "flow_logs" {
+  name = "${var.environment}-vpc-flow-logs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.common_tags
+}
+
+# IAM Role Policy for Flow Logs
+resource "aws_iam_role_policy" "flow_logs" {
+  name = "${var.environment}-vpc-flow-logs-policy"
+  role = aws_iam_role.flow_logs.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+```
+
+**File: `variables.tf`**:
+```hcl
+variable "aws_region" {
+  description = "AWS region for resources"
+  type        = string
+  default     = "us-east-1"
+}
+
+variable "environment" {
+  description = "Environment name (dev, staging, prod)"
+  type        = string
+  default     = "demo"
+}
+
+variable "vpc_cidr" {
+  description = "CIDR block for VPC"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "availability_zones" {
+  description = "List of availability zones"
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b"]
+}
+
+variable "nat_gateway_count" {
+  description = "Number of NAT Gateways (1 for cost, 2+ for HA)"
+  type        = number
+  default     = 1
+}
+
+variable "common_tags" {
+  description = "Common tags for all resources"
+  type        = map(string)
+  default = {
+    ManagedBy   = "Terraform"
+    Project     = "IaC Demo"
+  }
+}
+```
+
+**File: `outputs.tf`**:
+```hcl
+output "vpc_id" {
+  description = "VPC ID"
+  value       = aws_vpc.main.id
+}
+
+output "vpc_cidr" {
+  description = "VPC CIDR block"
+  value       = aws_vpc.main.cidr_block
+}
+
+output "public_subnet_ids" {
+  description = "List of public subnet IDs"
+  value       = aws_subnet.public[*].id
+}
+
+output "private_subnet_ids" {
+  description = "List of private subnet IDs"
+  value       = aws_subnet.private[*].id
+}
+
+output "nat_gateway_ips" {
+  description = "Elastic IPs of NAT Gateways"
+  value       = aws_eip.nat[*].public_ip
+}
+
+output "web_security_group_id" {
+  description = "Web tier security group ID"
+  value       = aws_security_group.web.id
+}
+
+output "app_security_group_id" {
+  description = "App tier security group ID"
+  value       = aws_security_group.app.id
+}
+```
+
+### Terraform Deployment Commands
+
+**1. Initialize Terraform**:
+```bash
+terraform init
+```
+
+**Expected output**:
+```
+Initializing the backend...
+Initializing provider plugins...
+- Finding hashicorp/aws versions matching "~> 5.0"...
+- Installing hashicorp/aws v5.x.x...
+
+Terraform has been successfully initialized!
+```
+
+**2. Format and validate**:
+```bash
+terraform fmt
+terraform validate
+```
+
+**3. Plan deployment**:
+```bash
+terraform plan
+```
+
+**Expected output**:
+```
+Plan: 24 to add, 0 to change, 0 to destroy.
+```
+
+**4. Apply configuration**:
+```bash
+terraform apply
+```
+
+Type `yes` when prompted.
+
+**Expected output**:
+```
+Apply complete! Resources: 24 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+app_security_group_id = "sg-xxxxxxxxx"
+nat_gateway_ips = [
+  "X.X.X.X",
+]
+private_subnet_ids = [
+  "subnet-xxxxxxxxx",
+  "subnet-yyyyyyyyy",
+]
+public_subnet_ids = [
+  "subnet-aaaaaaa",
+  "subnet-bbbbbbb",
+]
+vpc_cidr = "10.0.0.0/16"
+vpc_id = "vpc-xxxxxxxxx"
+web_security_group_id = "sg-yyyyyyyyy"
+```
+
+**5. Verify deployment**:
+```bash
+# Export VPC ID from Terraform output
+export VPC_ID=$(terraform output -raw vpc_id)
+
+# Run verification script
+./verify-network-config.sh
+```
+
+**6. Show current state**:
+```bash
+terraform show
+```
+
+**7. Destroy infrastructure**:
+```bash
+terraform destroy
+```
+
+Type `yes` when prompted.
+
+### Multi-Environment Terraform with Workspaces
+
+**File: `terraform.tfvars.dev`**:
+```hcl
+environment          = "dev"
+vpc_cidr             = "10.0.0.0/16"
+availability_zones   = ["us-east-1a", "us-east-1b"]
+nat_gateway_count    = 1
+aws_region          = "us-east-1"
+
+common_tags = {
+  ManagedBy   = "Terraform"
+  Environment = "Development"
+  CostCenter  = "Engineering"
+}
+```
+
+**File: `terraform.tfvars.prod`**:
+```hcl
+environment          = "prod"
+vpc_cidr             = "10.1.0.0/16"
+availability_zones   = ["us-east-1a", "us-east-1b", "us-east-1c"]
+nat_gateway_count    = 3  # One per AZ for HA
+aws_region          = "us-east-1"
+
+common_tags = {
+  ManagedBy   = "Terraform"
+  Environment = "Production"
+  CostCenter  = "Operations"
+}
+```
+
+**Deploy environments**:
+```bash
+# Deploy dev
+terraform apply -var-file="terraform.tfvars.dev"
+
+# Deploy prod
+terraform apply -var-file="terraform.tfvars.prod"
+```
+
+**Or use Terraform Workspaces**:
+```bash
+# Create workspaces
+terraform workspace new dev
+terraform workspace new prod
+
+# Switch to dev
+terraform workspace select dev
+terraform apply -var-file="terraform.tfvars.dev"
+
+# Switch to prod
+terraform workspace select prod
+terraform apply -var-file="terraform.tfvars.prod"
+
+# List workspaces
+terraform workspace list
+```
+
+---
+
+## Part 7: CDK vs Terraform Comparison
+
+### Feature Comparison
+
+| Feature | AWS CDK | Terraform |
+|---------|---------|-----------|
+| **Language** | TypeScript, Python, Java, C#, Go | HCL (HashiCorp Configuration Language) |
+| **Cloud Support** | AWS only | Multi-cloud (AWS, Azure, GCP, etc.) |
+| **Learning Curve** | Steeper (requires programming knowledge) | Moderate (declarative syntax) |
+| **Abstraction Level** | High (L1, L2, L3 constructs) | Medium (resources with modules) |
+| **State Management** | CloudFormation (AWS managed) | Terraform state file (local or remote) |
+| **Preview Changes** | `cdk diff` | `terraform plan` |
+| **Deployment** | `cdk deploy` | `terraform apply` |
+| **Best For** | AWS-native teams, complex logic | Multi-cloud, existing HCL expertise |
+| **IDE Support** | Excellent (IntelliSense, type checking) | Good (syntax highlighting, completion) |
+| **Community** | Growing AWS-focused | Large multi-cloud community |
+| **Cost** | Free (CloudFormation is free) | Free for basic, paid for enterprise features |
+
+### When to Choose CDK
+✅ AWS-only infrastructure
+✅ Team has programming expertise (TypeScript, Python, etc.)
+✅ Need complex conditional logic
+✅ Want AWS best practices built-in (L2/L3 constructs)
+✅ Prefer managed state (CloudFormation)
+✅ Need type safety and IDE support
+
+### When to Choose Terraform
+✅ Multi-cloud infrastructure
+✅ Team prefers declarative over imperative
+✅ Need provider ecosystem (1000+ providers)
+✅ Existing Terraform expertise
+✅ Want explicit control over resources
+✅ Need state file portability
+
+### Code Comparison Example
+
+**Creating a VPC:**
+
+**CDK (TypeScript) - ~10 lines**:
+```typescript
+const vpc = new ec2.Vpc(this, 'MyVpc', {
+  ipAddresses: ec2.IpAddresses.cidr('10.0.0.0/16'),
+  maxAzs: 2,
+  natGateways: 1,
+});
+```
+*Automatically creates: VPC, subnets, IGW, NAT GW, route tables, and associations*
+
+**Terraform (HCL) - ~100 lines for equivalent**:
+```hcl
+resource "aws_vpc" "main" { ... }
+resource "aws_internet_gateway" "main" { ... }
+resource "aws_subnet" "public" { ... }
+resource "aws_subnet" "private" { ... }
+resource "aws_eip" "nat" { ... }
+resource "aws_nat_gateway" "main" { ... }
+resource "aws_route_table" "public" { ... }
+resource "aws_route_table" "private" { ... }
+# ... plus associations
+```
+*More explicit control, but more code*
+
+### Deployment Time Comparison
+
+**Manual Console**: 60-75 minutes
+**CDK**: 5-7 minutes (first deploy), 2-3 minutes (updates)
+**Terraform**: 5-8 minutes (first apply), 2-4 minutes (updates)
+
+---
+
 ## Key Takeaways
 
 ### Manual Configuration Insights
